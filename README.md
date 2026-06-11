@@ -39,18 +39,24 @@ kernels are fuzzed directly (~75 M executions, zero mismatches).
 ## Performance
 
 `Valid` throughput on a ~1 MiB mixed-UTF-8 buffer (ASCII-heavy with 2/3/4-byte
-runes), **native amd64** (GitHub Actions `ubuntu-latest`), `-count=6`, median
-MB/s. The dev box is arm64, where this package's amd64 kernel only runs under
-Rosetta — and Rosetta hides AVX2 — so these numbers come from CI on native
-hardware; see [`.github/workflows/bench.yml`](.github/workflows/bench.yml).
+runes), **native amd64** (GitHub Actions `ubuntu-latest`, AMD EPYC 7763, AVX2,
+`GOAMD64=v1`), `-count=6`, median MB/s. The dev box is arm64, where this
+package's amd64 kernel only runs under Rosetta — and Rosetta hides AVX2 — so
+these numbers come from CI on native hardware; see
+[`.github/workflows/bench.yml`](.github/workflows/bench.yml).
 
-<!-- BENCH:START — filled from the native amd64 bench CI run -->
+<!-- BENCH:START — filled from the native amd64 bench CI run (run 27326298287) -->
 | implementation | kind | MB/s | vs stdlib |
 |---|---|---:|---:|
-| `unicode/utf8.Valid` (stdlib) | scalar | _TBD_ | 1.00× |
-| this package (`BenchmarkValid`) | pure-Go SIMD (SSE/AVX2) | _TBD_ | _TBD_ |
-| [`stuartcarnie/go-simd`](https://github.com/stuartcarnie/go-simd) | pure-Go SIMD (SSE4/AVX2) | _TBD_ | _TBD_ |
+| `unicode/utf8.Valid` (stdlib) | scalar | 312 | 1.00× |
+| this package (`BenchmarkValid`) | pure-Go SIMD (AVX2) | **5940** | **19.07×** |
+| [`stuartcarnie/go-simd`](https://github.com/stuartcarnie/go-simd) | pure-Go SIMD (SSE4/AVX2) | 5738 | 18.42× |
 <!-- BENCH:END -->
+
+This package edges the competitor by ~3.5% (5940 vs 5738 MB/s) and beats the
+standard library by ~19× on this AVX2 runner. Both SIMD validators implement the
+same Lemire reference; the small margin comes from this package's tighter
+go-asmgen-emitted loop and rune-boundary tail split.
 
 ## Prior art
 
