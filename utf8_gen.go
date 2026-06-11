@@ -70,6 +70,16 @@ func sig() abi.Signature {
 	)
 }
 
+// countSig is the signature of the rune-count kernels: src []byte, n blocks,
+// returning the number of non-continuation bytes in the first n blocks as an
+// int64.
+func countSig() abi.Signature {
+	return abi.LayoutArgs(
+		[]abi.Arg{abi.Slice("src"), abi.Scalar("n", abi.Int64)},
+		[]abi.Arg{abi.Scalar("ret", abi.Int64)},
+	)
+}
+
 func main() {
 	f := emit.NewFile("amd64")
 
@@ -267,7 +277,7 @@ func main() {
 		Raw("VPADDB Y5, Y3, Y3"). // Y3 = carried_continuations
 
 		// checkContinuations
-		Raw("VPCMPGTB Y2, Y3, Y5"). // carries > init_len
+		Raw("VPCMPGTB Y2, Y3, Y5").             // carries > init_len
 		Raw("VPCMPGTB %s+0(SB), Y2, Y6", c00b). // init_len > 0
 		Raw("VPCMPEQB Y6, Y5, Y5").
 		Raw("VPOR Y5, Y15, Y15").
@@ -303,7 +313,6 @@ func main() {
 		Raw("VMOVDQA Y0, Y13").
 		Raw("VMOVDQA Y1, Y14").
 		Raw("VMOVDQA Y3, Y12").
-
 		Raw("ADDQ $32, SI").Raw("DECQ CX").Raw("JNZ vloop").
 
 		// No final incomplete-sequence check (see SSE comment): the caller backs
@@ -317,6 +326,65 @@ func main() {
 	v.StoreRet("AX", "ret")
 	v.Ret()
 	f.Add(v.Func())
+
+	// ====================================================================
+	// Rune-count kernels. The number of runes in valid UTF-8 equals the
+	// number of bytes that are NOT continuation bytes, i.e. bytes where
+	// (b & 0xC0) != 0x80. These kernels count those bytes over n full SIMD
+	// blocks; the caller only trusts the result over a block-aligned prefix
+	// the validator has confirmed is valid UTF-8 ending on a rune boundary,
+	// and falls back to the scalar decoder otherwise (invalid input is where
+	// the non-continuation identity breaks).
+	//
+	// Per block: mark continuation bytes (b & 0xC0 == 0x80) as 0xFF, extract a
+	// bitmask with [V]PMOVMSKB, POPCNT it to count continuation bytes, and
+	// accumulate; the caller computes non-continuation = n*blockSize - cont.
+	// Counting continuations (not non-continuations) keeps the per-block work
+	// to a single AND/CMPEQ/PMOVMSKB/POPCNT and a running add.
+	// ====================================================================
+
+	cC0 := f.Data("cC0", repByte(0xC0, 16))
+	c80 := f.Data("c80", repByte(0x80, 16))
+
+	// ---- SSE: 16 bytes per block ----
+	//   AX = continuation-byte count accumulator
+	cs := amd64.NewFunc("countContSSE", countSig(), 0)
+	cs.LoadArg("src_base", "SI").LoadArg("n", "CX").
+		Raw("XORQ AX, AX"). // cont count = 0
+		Raw("MOVOU %s+0(SB), X1", cC0).
+		Raw("MOVOU %s+0(SB), X2", c80).
+		Label("csloop").
+		Raw("MOVOU (SI), X0").
+		Raw("PAND X1, X0").    // b & 0xC0
+		Raw("PCMPEQB X2, X0"). // == 0x80 ? 0xFF : 0x00 (continuation mask)
+		Raw("PMOVMSKB X0, DX").
+		Raw("POPCNTL DX, DX").
+		Raw("ADDQ DX, AX").
+		Raw("ADDQ $16, SI").Raw("DECQ CX").Raw("JNZ csloop")
+	cs.StoreRet("AX", "ret")
+	cs.Ret()
+	f.Add(cs.Func())
+
+	// ---- AVX2: 32 bytes per block ----
+	cC0b := f.Data("cC0b", repByte(0xC0, 32))
+	c80b := f.Data("c80b", repByte(0x80, 32))
+	cv := amd64.NewFunc("countContAVX2", countSig(), 0)
+	cv.LoadArg("src_base", "SI").LoadArg("n", "CX").
+		Raw("XORQ AX, AX").
+		Raw("VMOVDQU %s+0(SB), Y1", cC0b).
+		Raw("VMOVDQU %s+0(SB), Y2", c80b).
+		Label("cvloop").
+		Raw("VMOVDQU (SI), Y0").
+		Raw("VPAND Y1, Y0, Y0").
+		Raw("VPCMPEQB Y2, Y0, Y0").
+		Raw("VPMOVMSKB Y0, DX").
+		Raw("POPCNTL DX, DX").
+		Raw("ADDQ DX, AX").
+		Raw("ADDQ $32, SI").Raw("DECQ CX").Raw("JNZ cvloop").
+		Raw("VZEROUPPER")
+	cv.StoreRet("AX", "ret")
+	cv.Ret()
+	f.Add(cv.Func())
 
 	if err := os.WriteFile("utf8_amd64.s", []byte(f.String()), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)

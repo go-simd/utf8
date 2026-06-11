@@ -83,6 +83,70 @@ func testForce(t *testing.T, avx2 bool) {
 func TestValidForceSSE(t *testing.T)  { testForce(t, false) }
 func TestValidForceAVX2(t *testing.T) { testForce(t, true) }
 
+// runeCountForce mirrors runeCount but lets the test pick the kernel, so the
+// AVX2 count path can be exercised even when the (Rosetta / older-VM) CPU
+// reports no AVX2 and the live dispatch never reaches it.
+func runeCountForce(p []byte, avx2 bool) int {
+	n := len(p)
+	if avx2 && n >= 32 {
+		blocks := n / 32
+		if validBlocksAVX2(p, blocks) != 0 {
+			return countValidPrefix(p, blocks*32, countContAVX2(p, blocks))
+		}
+		return stdutf8.RuneCount(p)
+	}
+	if n >= 16 {
+		blocks := n / 16
+		if validBlocksSSE(p, blocks) != 0 {
+			return countValidPrefix(p, blocks*16, countContSSE(p, blocks))
+		}
+		return stdutf8.RuneCount(p)
+	}
+	return stdutf8.RuneCount(p)
+}
+
+func runeCountForceTest(t *testing.T, avx2 bool) {
+	t.Helper()
+	for _, c := range cases {
+		if got, want := runeCountForce(c.in, avx2), stdutf8.RuneCount(c.in); got != want {
+			t.Errorf("%s: avx2=%v got=%d want=%d in=%q", c.name, avx2, got, want, c.in)
+		}
+	}
+	rng := rand.New(rand.NewSource(11))
+	for n := 0; n <= 300; n++ {
+		b := make([]byte, n)
+		rng.Read(b)
+		if got, want := runeCountForce(b, avx2), stdutf8.RuneCount(b); got != want {
+			t.Fatalf("avx2=%v random n=%d got=%d want=%d %x", avx2, n, got, want, b)
+		}
+		var sb bytes.Buffer
+		for sb.Len() < n {
+			sb.WriteRune(rune(rng.Intn(0x10FFFF + 1)))
+		}
+		vb := sb.Bytes()
+		if got, want := runeCountForce(vb, avx2), stdutf8.RuneCount(vb); got != want {
+			t.Fatalf("avx2=%v valid n=%d got=%d want=%d", avx2, n, got, want)
+		}
+	}
+}
+
+func TestRuneCountForceSSE(t *testing.T)  { runeCountForceTest(t, false) }
+func TestRuneCountForceAVX2(t *testing.T) { runeCountForceTest(t, true) }
+
+// FuzzRuneCountForceAVX2 exercises the AVX2 count kernel directly against the
+// standard library, since the test CPU may report no AVX2 and never reach it
+// through the live dispatch.
+func FuzzRuneCountForceAVX2(f *testing.F) {
+	for _, c := range cases {
+		f.Add(c.in)
+	}
+	f.Fuzz(func(t *testing.T, p []byte) {
+		if got, want := runeCountForce(p, true), stdutf8.RuneCount(p); got != want {
+			t.Fatalf("avx2 RuneCount(%q)=%d want %d", p, got, want)
+		}
+	})
+}
+
 // FuzzValidForceAVX2 exercises the AVX2 kernel directly, since the (Rosetta)
 // test CPU may report no AVX2 and never reach it through the live dispatch.
 func FuzzValidForceAVX2(f *testing.F) {

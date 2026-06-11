@@ -142,6 +142,45 @@ vloop:
 	MOVB AX, ret+32(FP)
 	RET
 
+TEXT ·countContSSE(SB), NOSPLIT, $0-40
+	MOVQ src_base+0(FP), SI
+	MOVQ n+24(FP), CX
+	XORQ AX, AX
+	MOVOU cC0<>+0(SB), X1
+	MOVOU c80<>+0(SB), X2
+csloop:
+	MOVOU (SI), X0
+	PAND X1, X0
+	PCMPEQB X2, X0
+	PMOVMSKB X0, DX
+	POPCNTL DX, DX
+	ADDQ DX, AX
+	ADDQ $16, SI
+	DECQ CX
+	JNZ csloop
+	MOVQ AX, ret+32(FP)
+	RET
+
+TEXT ·countContAVX2(SB), NOSPLIT, $0-40
+	MOVQ src_base+0(FP), SI
+	MOVQ n+24(FP), CX
+	XORQ AX, AX
+	VMOVDQU cC0b<>+0(SB), Y1
+	VMOVDQU c80b<>+0(SB), Y2
+cvloop:
+	VMOVDQU (SI), Y0
+	VPAND Y1, Y0, Y0
+	VPCMPEQB Y2, Y0, Y0
+	VPMOVMSKB Y0, DX
+	POPCNTL DX, DX
+	ADDQ DX, AX
+	ADDQ $32, SI
+	DECQ CX
+	JNZ cvloop
+	VZEROUPPER
+	MOVQ AX, ret+32(FP)
+	RET
+
 DATA contLen<>+0(SB)/1, $0x01
 DATA contLen<>+1(SB)/1, $0x01
 DATA contLen<>+2(SB)/1, $0x01
@@ -713,4 +752,108 @@ DATA c00b<>+29(SB)/1, $0x00
 DATA c00b<>+30(SB)/1, $0x00
 DATA c00b<>+31(SB)/1, $0x00
 GLOBL c00b<>(SB), RODATA|NOPTR, $32
+
+DATA cC0<>+0(SB)/1, $0xc0
+DATA cC0<>+1(SB)/1, $0xc0
+DATA cC0<>+2(SB)/1, $0xc0
+DATA cC0<>+3(SB)/1, $0xc0
+DATA cC0<>+4(SB)/1, $0xc0
+DATA cC0<>+5(SB)/1, $0xc0
+DATA cC0<>+6(SB)/1, $0xc0
+DATA cC0<>+7(SB)/1, $0xc0
+DATA cC0<>+8(SB)/1, $0xc0
+DATA cC0<>+9(SB)/1, $0xc0
+DATA cC0<>+10(SB)/1, $0xc0
+DATA cC0<>+11(SB)/1, $0xc0
+DATA cC0<>+12(SB)/1, $0xc0
+DATA cC0<>+13(SB)/1, $0xc0
+DATA cC0<>+14(SB)/1, $0xc0
+DATA cC0<>+15(SB)/1, $0xc0
+GLOBL cC0<>(SB), RODATA|NOPTR, $16
+
+DATA c80<>+0(SB)/1, $0x80
+DATA c80<>+1(SB)/1, $0x80
+DATA c80<>+2(SB)/1, $0x80
+DATA c80<>+3(SB)/1, $0x80
+DATA c80<>+4(SB)/1, $0x80
+DATA c80<>+5(SB)/1, $0x80
+DATA c80<>+6(SB)/1, $0x80
+DATA c80<>+7(SB)/1, $0x80
+DATA c80<>+8(SB)/1, $0x80
+DATA c80<>+9(SB)/1, $0x80
+DATA c80<>+10(SB)/1, $0x80
+DATA c80<>+11(SB)/1, $0x80
+DATA c80<>+12(SB)/1, $0x80
+DATA c80<>+13(SB)/1, $0x80
+DATA c80<>+14(SB)/1, $0x80
+DATA c80<>+15(SB)/1, $0x80
+GLOBL c80<>(SB), RODATA|NOPTR, $16
+
+DATA cC0b<>+0(SB)/1, $0xc0
+DATA cC0b<>+1(SB)/1, $0xc0
+DATA cC0b<>+2(SB)/1, $0xc0
+DATA cC0b<>+3(SB)/1, $0xc0
+DATA cC0b<>+4(SB)/1, $0xc0
+DATA cC0b<>+5(SB)/1, $0xc0
+DATA cC0b<>+6(SB)/1, $0xc0
+DATA cC0b<>+7(SB)/1, $0xc0
+DATA cC0b<>+8(SB)/1, $0xc0
+DATA cC0b<>+9(SB)/1, $0xc0
+DATA cC0b<>+10(SB)/1, $0xc0
+DATA cC0b<>+11(SB)/1, $0xc0
+DATA cC0b<>+12(SB)/1, $0xc0
+DATA cC0b<>+13(SB)/1, $0xc0
+DATA cC0b<>+14(SB)/1, $0xc0
+DATA cC0b<>+15(SB)/1, $0xc0
+DATA cC0b<>+16(SB)/1, $0xc0
+DATA cC0b<>+17(SB)/1, $0xc0
+DATA cC0b<>+18(SB)/1, $0xc0
+DATA cC0b<>+19(SB)/1, $0xc0
+DATA cC0b<>+20(SB)/1, $0xc0
+DATA cC0b<>+21(SB)/1, $0xc0
+DATA cC0b<>+22(SB)/1, $0xc0
+DATA cC0b<>+23(SB)/1, $0xc0
+DATA cC0b<>+24(SB)/1, $0xc0
+DATA cC0b<>+25(SB)/1, $0xc0
+DATA cC0b<>+26(SB)/1, $0xc0
+DATA cC0b<>+27(SB)/1, $0xc0
+DATA cC0b<>+28(SB)/1, $0xc0
+DATA cC0b<>+29(SB)/1, $0xc0
+DATA cC0b<>+30(SB)/1, $0xc0
+DATA cC0b<>+31(SB)/1, $0xc0
+GLOBL cC0b<>(SB), RODATA|NOPTR, $32
+
+DATA c80b<>+0(SB)/1, $0x80
+DATA c80b<>+1(SB)/1, $0x80
+DATA c80b<>+2(SB)/1, $0x80
+DATA c80b<>+3(SB)/1, $0x80
+DATA c80b<>+4(SB)/1, $0x80
+DATA c80b<>+5(SB)/1, $0x80
+DATA c80b<>+6(SB)/1, $0x80
+DATA c80b<>+7(SB)/1, $0x80
+DATA c80b<>+8(SB)/1, $0x80
+DATA c80b<>+9(SB)/1, $0x80
+DATA c80b<>+10(SB)/1, $0x80
+DATA c80b<>+11(SB)/1, $0x80
+DATA c80b<>+12(SB)/1, $0x80
+DATA c80b<>+13(SB)/1, $0x80
+DATA c80b<>+14(SB)/1, $0x80
+DATA c80b<>+15(SB)/1, $0x80
+DATA c80b<>+16(SB)/1, $0x80
+DATA c80b<>+17(SB)/1, $0x80
+DATA c80b<>+18(SB)/1, $0x80
+DATA c80b<>+19(SB)/1, $0x80
+DATA c80b<>+20(SB)/1, $0x80
+DATA c80b<>+21(SB)/1, $0x80
+DATA c80b<>+22(SB)/1, $0x80
+DATA c80b<>+23(SB)/1, $0x80
+DATA c80b<>+24(SB)/1, $0x80
+DATA c80b<>+25(SB)/1, $0x80
+DATA c80b<>+26(SB)/1, $0x80
+DATA c80b<>+27(SB)/1, $0x80
+DATA c80b<>+28(SB)/1, $0x80
+DATA c80b<>+29(SB)/1, $0x80
+DATA c80b<>+30(SB)/1, $0x80
+DATA c80b<>+31(SB)/1, $0x80
+GLOBL c80b<>(SB), RODATA|NOPTR, $32
 
