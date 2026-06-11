@@ -27,3 +27,13 @@ jobs:
         run: go test -run '^$' -fuzz '^FuzzValidForceAVX2$' -fuzztime 15s ./...
       - if: matrix.arch == 'amd64'
         run: go test -run '^$' -fuzz '^FuzzRuneCountForceAVX2$' -fuzztime 15s ./...
+      # The amd64 job covers the AVX2 + SSE + POPCNT dispatch (the Force tests
+      # drive every branch even on a no-AVX2 runner); the arm64 job covers the
+      # !amd64 generic fallback (utf8_generic.go). Gate on both so neither arch's
+      # Go statements may slip below 100%.
+      - name: coverage gate (100%)
+        run: |
+          go test -covermode=atomic -coverprofile=cov.out ./...
+          pct=$(go tool cover -func=cov.out | awk '/^total:/{print $3}')
+          echo "coverage=$pct"
+          [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
