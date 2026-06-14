@@ -143,6 +143,54 @@ func TestRuneCountRandomLengths(t *testing.T) {
 	}
 }
 
+// TestValidRuneCountDifferential is a deterministic, high-volume differential
+// check of both Valid and RuneCount against unicode/utf8 over a large number of
+// adversarial inputs: random valid UTF-8 (multi-block) with random byte
+// corruptions injected, plus pure random noise. The corruptions land at random
+// offsets so every structural check in the SIMD validator (bad continuation,
+// overlong, surrogate, too-large, straddling block boundaries) is hit on
+// invalid input. This runs as an ordinary test, so on the ppc64le/s390x qemu CI
+// jobs it fuzzes those SIMD kernels against the standard library without needing
+// a native fuzzing toolchain in the emulated container.
+func TestValidRuneCountDifferential(t *testing.T) {
+	rng := rand.New(rand.NewSource(20240614))
+	iters := 200000
+	if testing.Short() {
+		iters = 2000
+	}
+	buf := make([]byte, 0, 512)
+	for it := 0; it < iters; it++ {
+		buf = buf[:0]
+		switch rng.Intn(3) {
+		case 0:
+			// pure random noise (mostly invalid), length spanning several blocks
+			n := rng.Intn(140)
+			for i := 0; i < n; i++ {
+				buf = append(buf, byte(rng.Intn(256)))
+			}
+		default:
+			// valid UTF-8, then inject 0..3 random byte corruptions
+			target := rng.Intn(140)
+			tmp := make([]byte, 4)
+			for len(buf) < target {
+				r := rune(rng.Intn(0x10FFFF + 1))
+				m := stdutf8.EncodeRune(tmp, r)
+				buf = append(buf, tmp[:m]...)
+			}
+			corruptions := rng.Intn(4)
+			for c := 0; c < corruptions && len(buf) > 0; c++ {
+				buf[rng.Intn(len(buf))] = byte(rng.Intn(256))
+			}
+		}
+		if got, want := Valid(buf), stdutf8.Valid(buf); got != want {
+			t.Fatalf("Valid mismatch it=%d got=%v want=%v bytes=%x", it, got, want, buf)
+		}
+		if got, want := RuneCount(buf), stdutf8.RuneCount(buf); got != want {
+			t.Fatalf("RuneCount mismatch it=%d got=%d want=%d bytes=%x", it, got, want, buf)
+		}
+	}
+}
+
 func FuzzRuneCount(f *testing.F) {
 	for _, c := range cases {
 		f.Add(c.in)

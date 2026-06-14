@@ -19,7 +19,20 @@ n  := utf8.RuneCountInString(s) // same int as unicode/utf8.RuneCountInString(s)
 | arch | kernel |
 |---|---|
 | amd64 | **SSE2/SSSE3 + SSE4.1** (16 B/block) and **AVX2** (32 B/block), runtime-dispatched |
+| ppc64le | **VSX/AltiVec** (16 B/block), baseline — qemu-validated; native perf pending |
+| s390x | **vector facility** (16 B/block), baseline — qemu-validated; native perf pending |
 | arm64 / loong64 / riscv64 | scalar (`unicode/utf8`) — NEON/LSX/RVV planned |
+
+The ppc64le and s390x kernels are 1:1 ports of the amd64 SSE path (no runtime
+dispatch, since VSX and the vector facility are baseline on POWER8+ and z13+):
+`PSHUFB` nibble lookups become `VPERM`, the `PALIGNR` "shift in the previous
+block" carry becomes `VSLDOI`/`VSLDB`, signed byte compares become
+`VCMPGTSB`/`VCHB`, and the rune-count popcount becomes `VPOPCNTD` (ppc64le) /
+`VPOPCT`+`VSUMB` (s390x). On ppc64le the source is loaded with `LXVB16X`
+(natural byte order, not `LXVD2X` which swaps doublewords on little-endian); on
+big-endian s390x `VL` already places the lowest memory address in lane 0, so the
+byte-classification algorithm is lane-order-consistent on both without any endian
+fix-up. Both are validated against `unicode/utf8` under qemu (see Coverage).
 
 ## Algorithm
 
@@ -127,11 +140,21 @@ library — about **4.6×**; the native-runner CI fills the table above.
 
 The CI gate enforces **100% coverage of the Go code** on every arch job: native
 amd64 (the Force tests drive the AVX2, SSE and POPCNT dispatch branches even on a
-runner whose CPU otherwise always reports AVX2) and native arm64 (which covers
-the `!amd64` generic fallback). Coverage is of the Go statements only: the
-generated `.s` SIMD kernels are not measured by `go test -cover` — they are
-validated by differential tests against `unicode/utf8` plus fuzzing (on a real
-AVX2 box).
+runner whose CPU otherwise always reports AVX2), native arm64 (which covers the
+`!amd64` generic fallback), and the emulated ppc64le and s390x jobs (cross-built
+and run under qemu, where VSX / the vector facility are baseline so the SIMD path
+is always taken). Coverage is of the Go statements only: the generated `.s` SIMD
+kernels are not measured by `go test -cover` — they are validated by differential
+tests against `unicode/utf8` plus fuzzing.
+
+The ppc64le and s390x kernels have no native runner, so they are exercised under
+qemu against `unicode/utf8` on both valid and invalid input:
+`TestValidRuneCountDifferential` runs 200k adversarial cases (random valid UTF-8
+with random byte corruptions, plus pure noise) comparing both `Valid` and
+`RuneCount` to the standard library, and the `FuzzValid`/`FuzzRuneCount`/
+`FuzzRuneCountInString` seed corpora (every invalid class — overlong, surrogate,
+too-large, lone/truncated continuation) run as ordinary tests there. The amd64
+and arm64 jobs additionally run the randomised native fuzzers.
 
 ## License
 

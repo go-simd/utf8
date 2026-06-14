@@ -3,7 +3,7 @@ on:
   push: { branches: [main] }
   pull_request:
 jobs:
-  test:
+  native:
     strategy:
       fail-fast: false
       matrix:
@@ -35,5 +35,33 @@ jobs:
         run: |
           go test -covermode=atomic -coverprofile=cov.out ./...
           pct=$(go tool cover -func=cov.out | awk '/^total:/{print $3}')
+          echo "coverage=$pct"
+          [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
+  # ppc64le (VSX) and s390x (vector facility) have no native runner, so build the
+  # test binary with the cross toolchain and run it under qemu via binfmt. These
+  # arches have no runtime dispatch (VSX / the vector facility are baseline), and
+  # the SIMD kernels are exercised here against unicode/utf8 on valid AND invalid
+  # input (TestValidRuneCountDifferential runs 200k adversarial cases plus the
+  # FuzzValid/FuzzRuneCount/FuzzRuneCountInString seed corpora). Mirrors the
+  # go-simd/matchlen emulated job: debian:trixie, QEMU_CPU=power9 for ppc64le and
+  # the default QEMU_CPU for s390x (do NOT pin z13/z14 — fatal under TCG).
+  emulated:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: ppc64le, image: "debian:trixie", qemu: "power9" }
+          - { arch: s390x,   image: "debian:trixie", qemu: "qemu" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - run: docker run --privileged --rm tonistiigi/binfmt --install ${{ matrix.arch }}
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go test -c -cover -o /tmp/t.test .
+      - run: docker run --rm --platform linux/${{ matrix.arch }} -e QEMU_CPU=${{ matrix.qemu }} -v /tmp:/t ${{ matrix.image }} /t/t.test -test.v -test.coverprofile=/t/cov.out
+      - name: coverage gate (100%)
+        run: |
+          pct=$(go tool cover -func=/tmp/cov.out | awk '/^total:/{print $3}')
           echo "coverage=$pct"
           [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
