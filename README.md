@@ -107,6 +107,16 @@ standard library by ~19× on this AVX2 runner. Both SIMD validators implement th
 same Lemire reference; the small margin comes from this package's tighter
 go-asmgen-emitted loop and rune-boundary tail split.
 
+**Re-bench (as of 2026-06-14, `-count=6` medians, kernels unchanged).** amd64
+on the local x86_64 QEMU VM (absolute MB/s run low; ratios are the signal):
+ours **~5.4× stdlib** (strong win confirmed), and **~0.84× stuartcarnie** on this
+VM — i.e. stuartcarnie measured slightly faster *under QEMU's TCG*. This does
+**not** overturn the native-CI verdict above (ours +3.5% on real AVX2 silicon):
+the two validators are within a few percent and QEMU's non-cycle-accurate
+emulation favours stuartcarnie's instruction mix here. The trusted native-CI
+ranking (ours edges stuartcarnie) is kept. arm64 has **no SIMD kernel** (NEON
+planned), so `BenchmarkValid` ≈ stdlib (~1.0×) on Apple Silicon, as expected.
+
 `RuneCount` throughput on the same ~1 MiB buffer, native amd64, `-count=6`,
 median MB/s. The `RuneCount` headline numbers come from the same native amd64
 bench CI (see [`.github/workflows/bench.yml`](.github/workflows/bench.yml)); the
@@ -124,6 +134,37 @@ allocation), which is the bulk of its cost on mixed text.
 On the local x86-64 validation VM (AVX2, `GOAMD64=v1`, QEMU-hosted so absolute
 MB/s run low) `RuneCount` measured ~372 MB/s vs ~81 MB/s for the standard
 library — about **4.6×**; the native-runner CI fills the table above.
+
+### ppc64le / s390x — llvm-mca cycle-model estimate
+
+> **Static analysis, NOT a hardware measurement; native perf pending real
+> silicon.** No GitHub-hosted POWER/IBM Z runner exists and qemu's TCG is not
+> cycle-accurate, so the cycle model is the only defensible signal. Numbers from
+> `llvm-mca` (LLVM 22) fed the `validBlocksVSX` / `validBlocksVX` steady-state
+> `sloop` (the data-independent 16-byte validate loop) translated to LLVM asm.
+
+| arch | cpu model | SIMD cyc/iter | SIMD B/cyc | scalar B/cyc (best→worst) | est. speedup |
+|---|---|---:|---:|---:|---:|
+| ppc64le | pwr9 | 17.0 (16 B) | ~0.94 | ASCII fast-path ~8.0 → DFA ~0.8 | **~0.12× (ASCII) … ~1.2× (mixed/DFA)** |
+| s390x | z14 | 16.5 (16 B) | ~0.97 | ASCII fast-path ~5.3 → DFA ~0.5 | **~0.18× (ASCII) … ~1.9× (mixed/DFA)** |
+
+**Honest, important read:** UTF-8 validation has two scalar regimes. On **pure
+ASCII**, `unicode/utf8.Valid`'s 8-byte word `&0x80…` fast-path is extremely cheap
+(modeled at ~1.0–1.5 cyc per 8 bytes = ~5–8 B/cyc), so the SIMD validator
+(~0.95 B/cyc here) is **slower per cycle than the scalar ASCII path** on this
+cycle model — the SIMD kernel runs the full multibyte-classification pipeline
+unconditionally. The SIMD win appears on **mixed / multibyte** text, where the
+scalar code drops into its branchy per-byte DFA (~0.5–0.8 B/cyc, latency-bound on
+chained table loads) and the constant-throughput SIMD path pulls ahead
+(~1.2–1.9× on the model). This mirrors the amd64 reality (huge stdlib win on
+mixed text). Caveats: llvm-mca idealizes the frontend (perfect dispatch, no
+branch misprediction); it **understates** the scalar DFA's true cost because it
+cannot model the load-to-load dependency latency or branch mispredicts that
+dominate that path on real silicon — so the SIMD advantage on mixed text is
+likely **larger** than the static ratio suggests. The committed VSX `sloop` keeps
+a few in-loop constant reloads (`LXVB16X` of `cED`/`c9F`/`cF4`/`c8F`) that the
+generator did not hoist; these are modeled as-is and inflate the cyc/iter
+slightly. All instructions were accepted and modeled by llvm-mca (no fallbacks).
 
 ## Prior art
 
