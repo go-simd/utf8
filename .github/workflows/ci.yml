@@ -37,20 +37,25 @@ jobs:
           pct=$(go tool cover -func=cov.out | awk '/^total:/{print $3}')
           echo "coverage=$pct"
           [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
-  # ppc64le (VSX) and s390x (vector facility) have no native runner, so build the
-  # test binary with the cross toolchain and run it under qemu via binfmt. These
-  # arches have no runtime dispatch (VSX / the vector facility are baseline), and
-  # the SIMD kernels are exercised here against unicode/utf8 on valid AND invalid
-  # input (TestValidRuneCountDifferential runs 200k adversarial cases plus the
-  # FuzzValid/FuzzRuneCount/FuzzRuneCountInString seed corpora). Mirrors the
-  # go-simd/matchlen emulated job: debian:trixie, QEMU_CPU=power9 for ppc64le and
-  # the default QEMU_CPU for s390x (do NOT pin z13/z14 — fatal under TCG).
+  # The arches with no native GitHub runner are built with the cross toolchain
+  # and run under qemu via binfmt. ppc64le (VSX) and s390x (vector facility) have
+  # baseline-SIMD kernels with no runtime dispatch; riscv64 and loong64 carry no
+  # arch-specific kernel and exercise the generic unicode/utf8 fallback
+  # (utf8_generic.go). All four run the full suite against unicode/utf8 on valid
+  # AND invalid input (TestValidRuneCountDifferential runs 200k adversarial cases
+  # plus the FuzzValid/FuzzRuneCount/FuzzRuneCountInString seed corpora). Mirrors
+  # the go-simd/matchlen emulated job: debian:trixie with QEMU_CPU=power9
+  # (ppc64le) / rv64,v=true,vlen=128 (riscv64), ghcr.io/loong64/debian:trixie
+  # with la464 (loong64), and the default QEMU_CPU for s390x (do NOT pin z13/z14
+  # — fatal under TCG).
   emulated:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
+          - { arch: riscv64, image: "debian:trixie", qemu: "rv64,v=true,vlen=128" }
+          - { arch: loong64, image: "ghcr.io/loong64/debian:trixie", qemu: "la464" }
           - { arch: ppc64le, image: "debian:trixie", qemu: "power9" }
           - { arch: s390x,   image: "debian:trixie", qemu: "qemu" }
     steps:
