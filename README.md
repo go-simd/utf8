@@ -153,6 +153,16 @@ as on amd64, the scalar ASCII fast-path can still win on pure ASCII (see the
 honest read below), so this 7.0× is the `Valid` throughput vs the stdlib
 validator on the benchmark buffer, not a claim against the ASCII fast-path.
 
+### riscv64 — native SpacemiT X60 measurement: scalar parity
+
+Measured on a real **SpacemiT X60** (riscv64 RVV 1.0, GCC Compile Farm,
+[portal.cfarm.net](https://portal.cfarm.net/), Go 1.26.4, June 2026). riscv64
+currently has no RVV kernel (it takes the `unicode/utf8` scalar fallback; an RVV
+port is planned), so this is **scalar parity**: `Valid` **63.3 vs stdlib 63.7
+MB/s**. No win on this arch yet — the SIMD `Valid` wins stay on amd64, arm64 and
+ppc64le. The X60 is a low-power, *in-order* core and is currently the only
+widely-available RVV 1.0 silicon.
+
 ### s390x — llvm-mca cycle-model estimate
 
 > **Static analysis, NOT a hardware measurement; native perf pending real
