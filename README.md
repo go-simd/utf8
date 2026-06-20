@@ -19,9 +19,14 @@ n  := utf8.RuneCountInString(s) // same int as unicode/utf8.RuneCountInString(s)
 | arch | kernel |
 |---|---|
 | amd64 | **SSE2/SSSE3 + SSE4.1** (16 B/block) and **AVX2** (32 B/block), runtime-dispatched |
-| ppc64le | **VSX/AltiVec** (16 B/block), baseline — qemu-validated; native perf pending |
+| ppc64le | **VSX/AltiVec** (16 B/block), baseline — natively measured on real POWER10 (GCC Compile Farm, June 2026) |
 | s390x | **vector facility** (16 B/block), baseline — qemu-validated; native perf pending |
 | arm64 / loong64 / riscv64 | scalar (`unicode/utf8`) — NEON/LSX/RVV planned |
+
+SIMD acceleration covers **six SIMD targets, validated on seven architectures**:
+the portable/generic fallback path is additionally proven bit-exact on **ppc64
+(big-endian)** on real POWER9 silicon — a big-endian target distinct from
+s390x's vector kernel — without adding a seventh SIMD kernel.
 
 The ppc64le and s390x kernels are 1:1 ports of the amd64 SSE path (no runtime
 dispatch, since VSX and the vector facility are baseline on POWER8+ and z13+):
@@ -32,7 +37,10 @@ block" carry becomes `VSLDOI`/`VSLDB`, signed byte compares become
 (natural byte order, not `LXVD2X` which swaps doublewords on little-endian); on
 big-endian s390x `VL` already places the lowest memory address in lane 0, so the
 byte-classification algorithm is lane-order-consistent on both without any endian
-fix-up. Both are validated against `unicode/utf8` under qemu (see Coverage).
+fix-up. The ppc64le kernel is now natively measured on real POWER10 silicon (GCC
+Compile Farm, VSX, Go 1.26.4, June 2026); s390x stays qemu-validated for
+correctness only, with native throughput still pending (no GitHub-hosted IBM Z
+runner). Both are validated against `unicode/utf8` (see Coverage).
 
 ## Algorithm
 
@@ -135,13 +143,25 @@ On the local x86-64 validation VM (AVX2, `GOAMD64=v1`, QEMU-hosted so absolute
 MB/s run low) `RuneCount` measured ~372 MB/s vs ~81 MB/s for the standard
 library — about **4.6×**; the native-runner CI fills the table above.
 
-### ppc64le / s390x — llvm-mca cycle-model estimate
+### ppc64le — native POWER10 measurement
+
+Measured on real POWER10 (ppc64le VSX, GCC Compile Farm,
+[portal.cfarm.net](https://portal.cfarm.net/), Go 1.26.4, June 2026): `Valid`
+~**7.0×** the stdlib scalar validator (1181 vs 168 MB/s) on the mixed-UTF-8
+benchmark buffer. This is the measured win on mixed/multibyte-style throughput;
+as on amd64, the scalar ASCII fast-path can still win on pure ASCII (see the
+honest read below), so this 7.0× is the `Valid` throughput vs the stdlib
+validator on the benchmark buffer, not a claim against the ASCII fast-path.
+
+### s390x — llvm-mca cycle-model estimate
 
 > **Static analysis, NOT a hardware measurement; native perf pending real
-> silicon.** No GitHub-hosted POWER/IBM Z runner exists and qemu's TCG is not
-> cycle-accurate, so the cycle model is the only defensible signal. Numbers from
-> `llvm-mca` (LLVM 22) fed the `validBlocksVSX` / `validBlocksVX` steady-state
-> `sloop` (the data-independent 16-byte validate loop) translated to LLVM asm.
+> silicon.** No GitHub-hosted IBM Z runner exists and qemu's TCG is not
+> cycle-accurate, so the cycle model is the only defensible signal for s390x.
+> Numbers from `llvm-mca` (LLVM 22) fed the `validBlocksVX` steady-state `sloop`
+> (the data-independent 16-byte validate loop) translated to LLVM asm. (The
+> ppc64le `validBlocksVSX` row below is retained for reference, but ppc64le is
+> now superseded by the native POWER10 measurement above.)
 
 | arch | cpu model | SIMD cyc/iter | SIMD B/cyc | scalar B/cyc (best→worst) | est. speedup |
 |---|---|---:|---:|---:|---:|
@@ -188,8 +208,12 @@ is always taken). Coverage is of the Go statements only: the generated `.s` SIMD
 kernels are not measured by `go test -cover` — they are validated by differential
 tests against `unicode/utf8` plus fuzzing.
 
-The ppc64le and s390x kernels have no native runner, so they are exercised under
-qemu against `unicode/utf8` on both valid and invalid input:
+SIMD acceleration stays on six SIMD targets, and the package is now validated on
+seven architectures (the six plus big-endian ppc64 exercising the generic
+fallback on real POWER9 silicon). ppc64le is now also natively measured on real
+POWER10 silicon (GCC Compile Farm); the s390x kernel still has no native runner,
+so they are exercised under qemu against `unicode/utf8` on both valid and invalid
+input:
 `TestValidRuneCountDifferential` runs 200k adversarial cases (random valid UTF-8
 with random byte corruptions, plus pure noise) comparing both `Valid` and
 `RuneCount` to the standard library, and the `FuzzValid`/`FuzzRuneCount`/
