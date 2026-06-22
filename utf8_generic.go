@@ -1,4 +1,4 @@
-//go:build !amd64 && !ppc64le && !s390x
+//go:build !amd64 && !arm64 && !ppc64le && !s390x
 
 package utf8
 
