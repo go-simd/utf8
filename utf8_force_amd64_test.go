@@ -40,6 +40,9 @@ func validForce(p []byte, avx2 bool) bool {
 	n := len(p)
 	if avx2 && n >= 32 {
 		blocks := n / 32
+		if int(asciiBlocksAVX2(p, blocks)) == blocks {
+			return stdutf8.Valid(p[blocks*32:])
+		}
 		if validBlocksAVX2(p, blocks) == 0 {
 			return false
 		}
@@ -47,6 +50,9 @@ func validForce(p []byte, avx2 bool) bool {
 	}
 	if n >= 16 {
 		blocks := n / 16
+		if int(asciiBlocksSSE(p, blocks)) == blocks {
+			return stdutf8.Valid(p[blocks*16:])
+		}
 		if validBlocksSSE(p, blocks) == 0 {
 			return false
 		}
@@ -90,6 +96,9 @@ func runeCountForce(p []byte, avx2 bool) int {
 	n := len(p)
 	if avx2 && n >= 32 {
 		blocks := n / 32
+		if int(asciiBlocksAVX2(p, blocks)) == blocks {
+			return blocks*32 + stdutf8.RuneCount(p[blocks*32:])
+		}
 		if validBlocksAVX2(p, blocks) != 0 {
 			return countValidPrefix(p, blocks*32, countContAVX2(p, blocks))
 		}
@@ -97,6 +106,9 @@ func runeCountForce(p []byte, avx2 bool) int {
 	}
 	if n >= 16 {
 		blocks := n / 16
+		if int(asciiBlocksSSE(p, blocks)) == blocks {
+			return blocks*16 + stdutf8.RuneCount(p[blocks*16:])
+		}
 		if validBlocksSSE(p, blocks) != 0 {
 			return countValidPrefix(p, blocks*16, countContSSE(p, blocks))
 		}

@@ -142,6 +142,93 @@ vloop:
 	MOVB AX, ret+32(FP)
 	RET
 
+TEXT ·asciiBlocksSSE(SB), NOSPLIT, $0-40
+	MOVQ src_base+0(FP), SI
+	MOVQ n+24(FP), CX
+	XORQ AX, AX
+	MOVQ CX, R8
+	SHRQ $2, R8
+	TESTQ R8, R8
+	JZ asse_tail
+asse_loop4:
+	MOVOU 0(SI), X0
+	MOVOU 16(SI), X1
+	MOVOU 32(SI), X2
+	MOVOU 48(SI), X3
+	POR X1, X0
+	POR X3, X2
+	POR X2, X0
+	PMOVMSKB X0, DX
+	TESTL DX, DX
+	JNZ asse_back
+	ADDQ $64, SI
+	ADDQ $4, AX
+	DECQ R8
+	JNZ asse_loop4
+	JMP asse_tail
+asse_back:
+asse_tail:
+	MOVQ CX, R9
+	SUBQ AX, R9
+	TESTQ R9, R9
+	JZ asse_done
+asse_loop1:
+	MOVOU (SI), X0
+	PMOVMSKB X0, DX
+	TESTL DX, DX
+	JNZ asse_done
+	ADDQ $16, SI
+	INCQ AX
+	DECQ R9
+	JNZ asse_loop1
+asse_done:
+	MOVQ AX, ret+32(FP)
+	RET
+
+TEXT ·asciiBlocksAVX2(SB), NOSPLIT, $0-40
+	MOVQ src_base+0(FP), SI
+	MOVQ n+24(FP), CX
+	XORQ AX, AX
+	MOVQ CX, R8
+	SHRQ $2, R8
+	TESTQ R8, R8
+	JZ aavx_tail
+aavx_loop4:
+	VMOVDQU 0(SI), Y0
+	VMOVDQU 32(SI), Y1
+	VMOVDQU 64(SI), Y2
+	VMOVDQU 96(SI), Y3
+	VPOR Y1, Y0, Y0
+	VPOR Y3, Y2, Y2
+	VPOR Y2, Y0, Y0
+	VPMOVMSKB Y0, DX
+	TESTL DX, DX
+	JNZ aavx_back
+	ADDQ $128, SI
+	ADDQ $4, AX
+	DECQ R8
+	JNZ aavx_loop4
+	JMP aavx_tail
+aavx_back:
+aavx_tail:
+	MOVQ CX, R9
+	SUBQ AX, R9
+	TESTQ R9, R9
+	JZ aavx_done
+aavx_loop1:
+	VMOVDQU (SI), Y0
+	VPMOVMSKB Y0, DX
+	TESTL DX, DX
+	JNZ aavx_done
+	ADDQ $32, SI
+	INCQ AX
+	DECQ R9
+	JNZ aavx_loop1
+aavx_done:
+	VZEROUPPER
+	MOVQ AX, ret+32(FP)
+	RET
+
 TEXT ·countContSSE(SB), NOSPLIT, $0-40
 	MOVQ src_base+0(FP), SI
 	MOVQ n+24(FP), CX

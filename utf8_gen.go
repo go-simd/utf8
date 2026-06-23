@@ -328,6 +328,119 @@ func main() {
 	f.Add(v.Func())
 
 	// ====================================================================
+	// asciiBlocksSSE / asciiBlocksAVX2: return the number of leading blocks
+	// (16 bytes for SSE, 32 for AVX2) that are pure ASCII (every byte < 0x80),
+	// stopping at the first block with a high bit. Per block this is a single
+	// load + a high-bit test ([V]PMOVMSKB), so a pure-ASCII run is memory-bound
+	// — matching the stdlib word-at-a-time ASCII fast path, which a full
+	// Lemire–Keiser pass would otherwise regress badly on the (very common)
+	// all-ASCII case. The caller uses the returned block count to confirm an
+	// all-ASCII buffer is valid and rune-count == len in one cheap pass, and to
+	// skip the heavy validator over the ASCII prefix. Structurally mirrors the
+	// arm64 NEON asciiBlocks (group-of-4 fast lane + per-block tail rescan).
+	// ====================================================================
+
+	// ---- SSE: 16 bytes per block ----
+	// Fast lane processes 4 blocks (64 B) at a time, POR-ing them into one
+	// accumulator and testing the high bits once per group; on a hit it steps
+	// back and falls into the per-block tail scan to pinpoint the first
+	// non-ASCII block. AX = ASCII block count.
+	as := amd64.NewFunc("asciiBlocksSSE", countSig(), 0)
+	as.LoadArg("src_base", "SI").LoadArg("n", "CX").
+		Raw("XORQ AX, AX"). // ASCII block count = 0
+		// R8 = number of 4-block (64 B) groups = n >> 2
+		Raw("MOVQ CX, R8").
+		Raw("SHRQ $2, R8").
+		Raw("TESTQ R8, R8").
+		Raw("JZ asse_tail").
+		Label("asse_loop4").
+		Raw("MOVOU 0(SI), X0").
+		Raw("MOVOU 16(SI), X1").
+		Raw("MOVOU 32(SI), X2").
+		Raw("MOVOU 48(SI), X3").
+		Raw("POR X1, X0").
+		Raw("POR X3, X2").
+		Raw("POR X2, X0"). // X0 = OR of the 4 blocks
+		Raw("PMOVMSKB X0, DX").
+		Raw("TESTL DX, DX").
+		Raw("JNZ asse_back"). // some high bit in this group: rescan block-wise
+		Raw("ADDQ $64, SI").
+		Raw("ADDQ $4, AX").
+		Raw("DECQ R8").
+		Raw("JNZ asse_loop4").
+		Raw("JMP asse_tail").
+		// asse_back: a high bit appeared in this 64 B group; SI is still at the
+		// group start, so just fall through to the per-block tail scan.
+		Label("asse_back").
+		// asse_tail: per-block scan of the remaining blocks (the < 4 leftover, or
+		// the group that contained the first high bit), stopping at the first
+		// non-ASCII block. R9 = remaining blocks to scan = n - AX.
+		Label("asse_tail").
+		Raw("MOVQ CX, R9").
+		Raw("SUBQ AX, R9").
+		Raw("TESTQ R9, R9").
+		Raw("JZ asse_done").
+		Label("asse_loop1").
+		Raw("MOVOU (SI), X0").
+		Raw("PMOVMSKB X0, DX").
+		Raw("TESTL DX, DX").
+		Raw("JNZ asse_done"). // first non-ASCII block: stop
+		Raw("ADDQ $16, SI").
+		Raw("INCQ AX").
+		Raw("DECQ R9").
+		Raw("JNZ asse_loop1").
+		Label("asse_done")
+	as.StoreRet("AX", "ret")
+	as.Ret()
+	f.Add(as.Func())
+
+	// ---- AVX2: 32 bytes per block ----
+	av := amd64.NewFunc("asciiBlocksAVX2", countSig(), 0)
+	av.LoadArg("src_base", "SI").LoadArg("n", "CX").
+		Raw("XORQ AX, AX").
+		// R8 = number of 4-block (128 B) groups = n >> 2
+		Raw("MOVQ CX, R8").
+		Raw("SHRQ $2, R8").
+		Raw("TESTQ R8, R8").
+		Raw("JZ aavx_tail").
+		Label("aavx_loop4").
+		Raw("VMOVDQU 0(SI), Y0").
+		Raw("VMOVDQU 32(SI), Y1").
+		Raw("VMOVDQU 64(SI), Y2").
+		Raw("VMOVDQU 96(SI), Y3").
+		Raw("VPOR Y1, Y0, Y0").
+		Raw("VPOR Y3, Y2, Y2").
+		Raw("VPOR Y2, Y0, Y0"). // Y0 = OR of the 4 blocks
+		Raw("VPMOVMSKB Y0, DX").
+		Raw("TESTL DX, DX").
+		Raw("JNZ aavx_back").
+		Raw("ADDQ $128, SI").
+		Raw("ADDQ $4, AX").
+		Raw("DECQ R8").
+		Raw("JNZ aavx_loop4").
+		Raw("JMP aavx_tail").
+		Label("aavx_back").
+		Label("aavx_tail").
+		Raw("MOVQ CX, R9").
+		Raw("SUBQ AX, R9").
+		Raw("TESTQ R9, R9").
+		Raw("JZ aavx_done").
+		Label("aavx_loop1").
+		Raw("VMOVDQU (SI), Y0").
+		Raw("VPMOVMSKB Y0, DX").
+		Raw("TESTL DX, DX").
+		Raw("JNZ aavx_done").
+		Raw("ADDQ $32, SI").
+		Raw("INCQ AX").
+		Raw("DECQ R9").
+		Raw("JNZ aavx_loop1").
+		Label("aavx_done").
+		Raw("VZEROUPPER")
+	av.StoreRet("AX", "ret")
+	av.Ret()
+	f.Add(av.Func())
+
+	// ====================================================================
 	// Rune-count kernels. The number of runes in valid UTF-8 equals the
 	// number of bytes that are NOT continuation bytes, i.e. bytes where
 	// (b & 0xC0) != 0x80. These kernels count those bytes over n full SIMD
