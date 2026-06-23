@@ -61,6 +61,55 @@ Prior to the NEON kernel, go-simd/utf8 *was* `unicode/utf8` on arm64
 | Valid mixed | 1.00× (fallback) | **9.0×** |
 | RuneCount   | 1.00× (fallback) | **8.7×** |
 
+## amd64 (AVX2, GitHub Actions x86_64 runner — ratios valid, absolute ns/op CI-noisy)
+
+**Methodology.** GitHub Actions `ubuntu-latest` runner, **AMD EPYC 7763** (`avx2`
+present, **no `avx512*`** — confirmed from `/proc/cpuinfo`), `GOAMD64` baseline,
+Go stable, single core. Same parity harness, `-count=6`, **min-of-6**. The runner
+is shared, so absolute throughput is noisy and **not comparable to the arm64 M4
+Max rows above** (different hardware/ISA); the **ratios vs stdlib** are measured
+back-to-back on the *same* CPU and are valid. Reproduce via
+`gh workflow run bench-amd64.yml`.
+
+### Valid — ASCII fast path (amd64 AVX2)
+
+| size | go-simd (MB/s) | stdlib | ×stdlib | verdict |
+|------|---------------:|-------:|--------:|---------|
+| 64 B   | 4571 |  4541 | 1.01× | parity |
+| 1 KiB  | 5650 | 31856 | 0.18× | **regresses vs stdlib** |
+| 16 KiB | 5667 | 46841 | 0.12× | **regresses vs stdlib** |
+| 1 MiB  | 5659 | 41473 | 0.14× | **regresses vs stdlib** |
+
+> **Honest finding (amd64).** On pure ASCII, **go-simd *loses* to stdlib by
+> ~5–8×** at ≥1 KiB. The Go `unicode/utf8.Valid` ASCII fast path on amd64 is a
+> word-at-a-time high-bit scan the compiler turns into ~30–47 GB/s; the amd64
+> Lemire–Keiser kernel here runs the full validator on every block and has **no
+> cheap ASCII pre-scan** (unlike the arm64 NEON path, which added a 64-byte
+> high-bit pre-scan). This is the one go-simd workload that regresses on amd64 —
+> the fix is to port the same ASCII pre-scan into the amd64 kernel (action 3).
+
+### Valid — multibyte mixed (amd64 AVX2)
+
+| size | go-simd (MB/s) | stdlib | ×stdlib | verdict |
+|------|---------------:|-------:|--------:|---------|
+| 64 B   | 4534 | 1199 |  3.78× | wins |
+| 1 KiB  | 5638 | 1156 |  4.88× | wins |
+| 16 KiB | 5672 | 1009 |  5.62× | wins |
+| 1 MiB  | 5654 |  300 | 18.83× | **wins big** |
+
+### RuneCount — multibyte mixed (amd64 AVX2)
+
+| size | go-simd (MB/s) | stdlib | ×stdlib | verdict |
+|------|---------------:|-------:|--------:|---------|
+| 64 B   | 2987 | 615 |  4.86× | wins |
+| 1 KiB  | 4787 | 706 |  6.78× | wins |
+| 16 KiB | 4993 | 668 |  7.47× | wins |
+| 1 MiB  | 4991 | 253 | 19.76× | **wins big** |
+
+* On amd64 the **multibyte/RuneCount paths win 3.8–19.8×** vs stdlib (same shape
+  as arm64). The **ASCII fast path regresses ~5–8×** because the amd64 kernel
+  lacks the ASCII pre-scan the arm64 path has — see the note above (action 3).
+
 ## Summary
 
 * The new **arm64/NEON kernel wins on every workload**: the multibyte/RuneCount
@@ -73,5 +122,10 @@ Prior to the NEON kernel, go-simd/utf8 *was* `unicode/utf8` on arm64
 
 ### Action items
 1. ~~Add an arm64/NEON kernel for Valid and RuneCount.~~ **Done** (this revision).
-2. **amd64/AVX2 follow-up:** run this harness on a real x86_64 VM to quantify the
-   Lemire–Keiser SIMD speedup vs stdlib there (Rosetta lacks AVX2).
+2. ~~**amd64/AVX2 follow-up:** quantify the Lemire–Keiser speedup vs stdlib.~~
+   **Done** (see the amd64 section) — on the GitHub Actions x86_64 runner (EPYC
+   7763, AVX2): multibyte Valid/RuneCount win **3.8–19.8×**, but the **pure-ASCII
+   path regresses ~5–8×** vs stdlib's word-at-a-time fast path.
+3. **amd64 ASCII pre-scan:** port the arm64 NEON path's 64-byte high-bit ASCII
+   pre-scan into the amd64 kernel so the pure-ASCII fast path stops regressing
+   against `unicode/utf8.Valid`'s word-at-a-time scan.
