@@ -109,6 +109,49 @@ csloop:
 	MOVD R8, ret+32(FP)
 	RET
 
+TEXT ·asciiBlocksVX(SB), NOSPLIT, $0-40
+	MOVD src_base+0(FP), R2
+	MOVD n+24(FP), R3
+	MOVD $c80asc_z<>+0(SB), R5
+	VL (R5), V25
+	MOVD $0, R8
+	SRD $2, R3, R6
+	CMPBEQ R6, $0, atail
+aloop4:
+	VL (R2), V0
+	VL 16(R2), V1
+	VL 32(R2), V2
+	VL 48(R2), V3
+	VO V1, V0, V0
+	VO V3, V2, V2
+	VO V2, V0, V0
+	VN V0, V25, V0
+	VLGVG $0, V0, R9
+	VLGVG $1, V0, R10
+	OR R10, R9, R9
+	CMPBNE R9, $0, atail
+	ADD $64, R2
+	ADD $4, R8
+	ADD $-1, R6
+	CMPBNE R6, $0, aloop4
+atail:
+	SUB R8, R3, R7
+	CMPBEQ R7, $0, adone
+aloop1:
+	VL (R2), V0
+	VN V0, V25, V0
+	VLGVG $0, V0, R9
+	VLGVG $1, V0, R10
+	OR R10, R9, R9
+	CMPBNE R9, $0, adone
+	ADD $16, R2
+	ADD $1, R8
+	ADD $-1, R7
+	CMPBNE R7, $0, aloop1
+adone:
+	MOVD R8, ret+32(FP)
+	RET
+
 DATA contLen_z<>+0(SB)/1, $0x01
 DATA contLen_z<>+1(SB)/1, $0x01
 DATA contLen_z<>+2(SB)/1, $0x01
@@ -324,4 +367,22 @@ DATA c01b_z<>+13(SB)/1, $0x01
 DATA c01b_z<>+14(SB)/1, $0x01
 DATA c01b_z<>+15(SB)/1, $0x01
 GLOBL c01b_z<>(SB), RODATA|NOPTR, $16
+
+DATA c80asc_z<>+0(SB)/1, $0x80
+DATA c80asc_z<>+1(SB)/1, $0x80
+DATA c80asc_z<>+2(SB)/1, $0x80
+DATA c80asc_z<>+3(SB)/1, $0x80
+DATA c80asc_z<>+4(SB)/1, $0x80
+DATA c80asc_z<>+5(SB)/1, $0x80
+DATA c80asc_z<>+6(SB)/1, $0x80
+DATA c80asc_z<>+7(SB)/1, $0x80
+DATA c80asc_z<>+8(SB)/1, $0x80
+DATA c80asc_z<>+9(SB)/1, $0x80
+DATA c80asc_z<>+10(SB)/1, $0x80
+DATA c80asc_z<>+11(SB)/1, $0x80
+DATA c80asc_z<>+12(SB)/1, $0x80
+DATA c80asc_z<>+13(SB)/1, $0x80
+DATA c80asc_z<>+14(SB)/1, $0x80
+DATA c80asc_z<>+15(SB)/1, $0x80
+GLOBL c80asc_z<>(SB), RODATA|NOPTR, $16
 
