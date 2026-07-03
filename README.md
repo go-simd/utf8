@@ -22,7 +22,7 @@ n  := utf8.RuneCountInString(s) // same int as unicode/utf8.RuneCountInString(s)
 |---|---|
 | amd64 | **SSE2/SSSE3 + SSE4.1** (16 B/block) and **AVX2** (32 B/block), runtime-dispatched |
 | ppc64le | **VSX/AltiVec** (16 B/block), baseline — qemu-validated; native perf pending |
-| s390x | **vector facility** (16 B/block), baseline — qemu-validated; native perf pending |
+| s390x | **vector facility** (16 B/block) + VX ASCII pre-scan, baseline — measured on real z15 (see Performance) |
 | arm64 / loong64 / riscv64 | scalar (`unicode/utf8`) — NEON/LSX/RVV planned |
 
 The ppc64le and s390x kernels are 1:1 ports of the amd64 SSE path (no runtime
@@ -137,18 +137,38 @@ On the local x86-64 validation VM (AVX2, `GOAMD64=v1`, QEMU-hosted so absolute
 MB/s run low) `RuneCount` measured ~372 MB/s vs ~81 MB/s for the standard
 library — about **4.6×**; the native-runner CI fills the table above.
 
-### ppc64le / s390x — llvm-mca cycle-model estimate
+### s390x — measured on real IBM z15
+
+`Valid`/`RuneCount` throughput on real IBM z15 (linux1, VXE2, go1.26.4,
+2026-07-03, `-count=6`, `BenchmarkParity*`, vs `unicode/utf8`):
+
+| workload | size | this package vs stdlib |
+|---|---|---:|
+| `ValidASCII` | 16 KiB | **1.96×** |
+| `ValidASCII` | 1 MiB | **1.73×** |
+| `ValidMixed` | 1 MiB | **10.4×** |
+| `RuneCount` | 1 MiB | **9.5×** |
+
+All-ASCII validation was the one regime where the SIMD path lost: running the
+full Lemire–Keiser classification pipeline unconditionally, it measured ~0.13×
+stdlib (≈7.5× slower) on pure ASCII, matching the cycle-model estimate below. A
+VX ASCII pre-scan (`asciiBlocksVX` — a cheap per-16-byte-block high-bit test)
+now short-circuits pure-ASCII runs to memory bandwidth, taking all-ASCII from
+0.13× to **1.7–2.0× stdlib**. Multibyte `ValidMixed` (**10.4×**) and `RuneCount`
+(**9.5×**) already won and are unchanged — even larger than the static model
+predicted, as the caveat there anticipated.
+
+### ppc64le — llvm-mca cycle-model estimate
 
 > **Static analysis, NOT a hardware measurement; native perf pending real
-> silicon.** No GitHub-hosted POWER/IBM Z runner exists and qemu's TCG is not
+> silicon.** No GitHub-hosted POWER runner exists and qemu's TCG is not
 > cycle-accurate, so the cycle model is the only defensible signal. Numbers from
-> `llvm-mca` (LLVM 22) fed the `validBlocksVSX` / `validBlocksVX` steady-state
+> `llvm-mca` (LLVM 22) fed the `validBlocksVSX` steady-state
 > `sloop` (the data-independent 16-byte validate loop) translated to LLVM asm.
 
 | arch | cpu model | SIMD cyc/iter | SIMD B/cyc | scalar B/cyc (best→worst) | est. speedup |
 |---|---|---:|---:|---:|---:|
 | ppc64le | pwr9 | 17.0 (16 B) | ~0.94 | ASCII fast-path ~8.0 → DFA ~0.8 | **~0.12× (ASCII) … ~1.2× (mixed/DFA)** |
-| s390x | z14 | 16.5 (16 B) | ~0.97 | ASCII fast-path ~5.3 → DFA ~0.5 | **~0.18× (ASCII) … ~1.9× (mixed/DFA)** |
 
 **Honest, important read:** UTF-8 validation has two scalar regimes. On **pure
 ASCII**, `unicode/utf8.Valid`'s 8-byte word `&0x80…` fast-path is extremely cheap
