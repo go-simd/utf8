@@ -22,7 +22,7 @@ n  := utf8.RuneCountInString(s) // same int as unicode/utf8.RuneCountInString(s)
 |---|---|
 | amd64 | **SSE2/SSSE3 + SSE4.1** (16 B/block) and **AVX2** (32 B/block), runtime-dispatched |
 | ppc64le | **VSX/AltiVec** (16 B/block), baseline — qemu-validated; native perf pending |
-| s390x | **vector facility** (16 B/block), baseline — qemu-validated; native perf pending |
+| s390x | **vector facility** (16 B/block), baseline; +pure-ASCII pre-scan at memory bandwidth — measured on real z15 (LPAR / VXE2): `ValidASCII` 26.7 GB/s (1.13× stdlib), `ValidMixed` 3.13 GB/s (10.4× stdlib), `RuneCount` 2.6 GB/s (9.7× stdlib) |
 | arm64 / loong64 / riscv64 | scalar (`unicode/utf8`) — NEON/LSX/RVV planned |
 
 The ppc64le and s390x kernels are 1:1 ports of the amd64 SSE path (no runtime
