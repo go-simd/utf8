@@ -2,8 +2,9 @@
 
 // Command gen produces utf8_s390x.s with go-asmgen: the Lemire–Keiser
 // "Validating UTF-8 In Less Than One Instruction Per Byte" lookup-based SIMD
-// validator and the continuation-byte counter, for s390x (IBM Z, vector
-// facility baseline on z13+, so no runtime dispatch). 16 bytes per block.
+// validator, the continuation-byte counter, and a pure-ASCII pre-scan, for
+// s390x (IBM Z, vector facility baseline on z13+, so no runtime dispatch). 16
+// bytes per block.
 //
 // The kernels are a 1:1 port of the amd64 SSE path (utf8_gen.go), with these
 // instruction substitutions:
@@ -228,6 +229,70 @@ func main() {
 	cs.StoreRet("R8", "ret")
 	cs.Ret()
 	f.Add(cs.Func())
+
+	// ====================================================================
+	// asciiBlocksVX: return the number of leading 16-byte blocks (out of n)
+	// that are pure ASCII (every byte < 0x80), stopping at the first block
+	// with a high bit set. Per block this is only a VL + a high-bit test, so a
+	// pure-ASCII run is memory-bound — matching the stdlib word-at-a-time ASCII
+	// fast path, which the full Lemire–Keiser validator would otherwise regress
+	// badly on the (very common) all-ASCII case (measured on real z15: the heavy
+	// validator runs the all-ASCII path at ~7.5x below stdlib). The caller uses
+	// the returned block count to confirm an all-ASCII buffer is valid and
+	// rune-count == len in one cheap pass and to skip the validator over the
+	// ASCII prefix. Structurally mirrors the amd64 asciiBlocksSSE (group-of-4
+	// fast lane + per-block tail rescan).
+	//
+	// Fast lane processes 4 blocks (64 B) at a time, VO-ing them into one
+	// accumulator and testing the high bits once per group; on a hit it falls
+	// into the per-block tail scan to pinpoint the first non-ASCII block. R8 =
+	// ASCII block count. The high-bit test is lane-order-invisible, so the
+	// big-endian VL lane order does not matter (the count advances in memory
+	// order via R2, independent of lanes).
+	// ====================================================================
+	c80asc := f.Data("c80asc_z", repByte(0x80, 16))
+
+	au := s390x.NewFunc("asciiBlocksVX", countSig(), 0)
+	au.LoadArg("src_base", "R2").LoadArg("n", "R3").
+		Raw("MOVD $%s+0(SB), R5", c80asc).Raw("VL (R5), V25").
+		Raw("MOVD $0, R8").    // ASCII block count
+		Raw("SRD $2, R3, R6"). // R6 = n >> 2 = number of 4-block groups
+		Raw("CMPBEQ R6, $0, atail").
+		Label("aloop4").
+		Raw("VL (R2), V0").
+		Raw("VL 16(R2), V1").
+		Raw("VL 32(R2), V2").
+		Raw("VL 48(R2), V3").
+		Raw("VO V1, V0, V0").
+		Raw("VO V3, V2, V2").
+		Raw("VO V2, V0, V0").  // V0 = OR of the 4 blocks
+		Raw("VN V0, V25, V0"). // high bits (byte & 0x80)
+		Raw("VLGVG $0, V0, R9").
+		Raw("VLGVG $1, V0, R10").
+		Raw("OR R10, R9, R9").
+		Raw("CMPBNE R9, $0, atail"). // some high bit in this group: rescan block-wise
+		Raw("ADD $64, R2").
+		Raw("ADD $4, R8").
+		Raw("ADD $-1, R6").
+		Raw("CMPBNE R6, $0, aloop4").
+		Label("atail").
+		Raw("SUB R8, R3, R7"). // R7 = n - count = blocks left to scan
+		Raw("CMPBEQ R7, $0, adone").
+		Label("aloop1").
+		Raw("VL (R2), V0").
+		Raw("VN V0, V25, V0").
+		Raw("VLGVG $0, V0, R9").
+		Raw("VLGVG $1, V0, R10").
+		Raw("OR R10, R9, R9").
+		Raw("CMPBNE R9, $0, adone"). // first non-ASCII block: stop
+		Raw("ADD $16, R2").
+		Raw("ADD $1, R8").
+		Raw("ADD $-1, R7").
+		Raw("CMPBNE R7, $0, aloop1").
+		Label("adone")
+	au.StoreRet("R8", "ret")
+	au.Ret()
+	f.Add(au.Func())
 
 	if err := os.WriteFile("utf8_s390x.s", []byte(f.String()), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
