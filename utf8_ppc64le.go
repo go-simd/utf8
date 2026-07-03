@@ -3,6 +3,7 @@
 package utf8
 
 import (
+	"encoding/binary"
 	"unicode/utf8"
 
 	"golang.org/x/sys/cpu"
@@ -32,6 +33,49 @@ func countContVSX(src []byte, n int) int64
 // no-SIMD fallback on a POWER9+ host.
 var hasVSX = cpu.PPC64.IsPOWER9
 
+// asciiPrefixLen returns the number of leading pure-ASCII bytes (b < 0x80) in
+// p. Pure-ASCII input is trivially valid UTF-8 with one rune per byte, so any
+// consumer of a pure-ASCII prefix can skip the heavy Lemire–Keiser validator
+// over that region.
+//
+// The loop shape mirrors unicode/utf8.Valid: a 4-way-unrolled word scan (32
+// bytes / iteration) then a word tail then a byte tail. Each word is loaded
+// as a single 8-byte uint64, so the ppc64le compiler generates one LD per word
+// and hoists the loop-invariant hiBits constant. The 4-way OR keeps the FPU
+// pipeline full — measured at memory bandwidth on POWER9. This mirrors the
+// asciiBlocksSSE / asciiBlocksAVX2 pattern used by the amd64 kernel and the
+// asciiPrefixLen helper on s390x.
+func asciiPrefixLen(p []byte) int {
+	const hiBits = 0x8080808080808080
+	orig := len(p)
+	// Capacity trim — the stdlib Valid uses this to skip a runtime
+	// capacity recompute on each slice op inside the tight loop.
+	p = p[:len(p):len(p)]
+	for len(p) >= 32 {
+		w0 := binary.LittleEndian.Uint64(p)
+		w1 := binary.LittleEndian.Uint64(p[8:])
+		w2 := binary.LittleEndian.Uint64(p[16:])
+		w3 := binary.LittleEndian.Uint64(p[24:])
+		if (w0|w1|w2|w3)&hiBits != 0 {
+			break
+		}
+		p = p[32:]
+	}
+	for len(p) >= 8 {
+		if binary.LittleEndian.Uint64(p)&hiBits != 0 {
+			break
+		}
+		p = p[8:]
+	}
+	for len(p) > 0 {
+		if p[0] >= 0x80 {
+			break
+		}
+		p = p[1:]
+	}
+	return orig - len(p)
+}
+
 // runeStart returns the largest index <= i in p that begins a rune (is not a
 // continuation byte), scanning back at most 3 bytes; see utf8_amd64.go.
 func runeStart(p []byte, i int) int {
@@ -47,7 +91,16 @@ func runeStart(p []byte, i int) int {
 // valid validates the bulk of p with the VSX kernel over the largest 16-byte
 // block-aligned prefix, then re-validates from the last rune boundary before
 // that split plus the tail with the standard library.
+//
+// The pre-scan short-circuits the very common pure-ASCII case: if every byte
+// of p is < 0x80, p is trivially valid UTF-8 and no Lemire–Keiser pass is
+// needed. Same pattern as amd64/arm64/s390x — measured on real POWER9 the
+// scan runs at memory bandwidth, well above the SIMD validator's byte-shuffle
+// throughput on that microarch.
 func valid(p []byte) bool {
+	if asciiPrefixLen(p) == len(p) {
+		return true
+	}
 	n := len(p)
 	if hasVSX && n >= 16 {
 		blocks := n / 16
@@ -71,13 +124,22 @@ func countValidPrefix(p []byte, end int, cont int64) int {
 // the VSX continuation-byte counter over a SIMD-validated block-aligned prefix
 // and the scalar decoder for the straddling rune, the tail, and any invalid
 // input; see utf8_amd64.go for the full argument.
+//
+// Pure-ASCII prefix short-circuit: rune count of an ASCII prefix is just its
+// byte length; only the (possibly-empty) tail past the first non-ASCII byte
+// needs the SIMD validator + continuation count.
 func runeCount(p []byte) int {
-	n := len(p)
+	asciiPfx := asciiPrefixLen(p)
+	if asciiPfx == len(p) {
+		return len(p)
+	}
+	tail := p[asciiPfx:]
+	n := len(tail)
 	if hasVSX && n >= 16 {
 		blocks := n / 16
-		if validBlocksVSX(p, blocks) != 0 {
-			return countValidPrefix(p, blocks*16, countContVSX(p, blocks))
+		if validBlocksVSX(tail, blocks) != 0 {
+			return asciiPfx + countValidPrefix(tail, blocks*16, countContVSX(tail, blocks))
 		}
 	}
-	return utf8.RuneCount(p)
+	return asciiPfx + utf8.RuneCount(tail)
 }
