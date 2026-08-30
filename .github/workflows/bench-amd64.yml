@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest # native amd64 (has AVX2)
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with: { go-version: stable }
       - name: record CPU capability
         run: |
@@ -25,7 +25,7 @@ jobs:
       - name: parity benchmark (go-simd vs stdlib vs stuartcarnie)
         run: |
           go test -run '^$' -bench 'Parity' -benchmem -count=6 . | tee bench-amd64.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bench-amd64
           path: bench-amd64.txt
