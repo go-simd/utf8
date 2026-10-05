@@ -144,9 +144,9 @@ func main() {
 
 		// --- checkContinuations ---
 		// overunder = cmpeq( cmpgt(carries, init_len), cmpgt(init_len, 0) )
-		Raw("VCHB V3, V2, V5").   // V5 = carries > init_len (signed)
-		Raw("VCHB V2, V30, V6").  // V6 = init_len > 0 (signed)
-		Raw("VCEQB V6, V5, V5").  // overunder
+		Raw("VCHB V3, V2, V5").  // V5 = carries > init_len (signed)
+		Raw("VCHB V2, V30, V6"). // V6 = init_len > 0 (signed)
+		Raw("VCEQB V6, V5, V5"). // overunder
 		Raw("VO V5, V20, V20").
 
 		// off1_current_bytes = alignr(rawbytes, prev_rawbytes, 15)
@@ -180,7 +180,6 @@ func main() {
 		Raw("VLR V0, V21").
 		Raw("VLR V1, V22").
 		Raw("VLR V3, V23").
-
 		Raw("ADD $16, R2").
 		Raw("ADD $-1, R3").
 		Raw("CMPBNE R3, $0, sloop").

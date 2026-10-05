@@ -153,9 +153,9 @@ func main() {
 
 		// --- checkContinuations ---
 		// overunder = cmpeq( cmpgt(carries, init_len), cmpgt(init_len, 0) )
-		Raw("VCMPGTSB V3, V2, V5").    // V5 = carries > init_len
-		Raw("VCMPGTSB V2, V31, V6").   // V6 = init_len > 0
-		Raw("VCMPEQUB V6, V5, V5").    // V5 = overunder
+		Raw("VCMPGTSB V3, V2, V5").  // V5 = carries > init_len
+		Raw("VCMPGTSB V2, V31, V6"). // V6 = init_len > 0
+		Raw("VCMPEQUB V6, V5, V5").  // V5 = overunder
 		Raw("VOR V5, V20, V20").
 
 		// off1_current_bytes = alignr(rawbytes, prev_rawbytes, 15)
@@ -197,9 +197,9 @@ func main() {
 		Raw("CMP R5, $0").Raw("BNE sloop").
 
 		// ret = (has_error all-zero) ? 1 : 0
-		Raw("MFVSRD VS52, R8").       // R8 = has_error doubleword 0
+		Raw("MFVSRD VS52, R8"). // R8 = has_error doubleword 0
 		Raw("VSLDOI $8, V20, V20, V4").
-		Raw("MFVSRD VS36, R9").       // R9 = has_error doubleword 1
+		Raw("MFVSRD VS36, R9"). // R9 = has_error doubleword 1
 		Raw("OR R9, R8, R8").
 		Raw("MOVD $1, R10").
 		Raw("CMP R8, $0").
@@ -222,11 +222,11 @@ func main() {
 
 	cs := ppc64.NewFunc("countContVSX", countSig(), 0)
 	cs.LoadArg("src_base", "R4").LoadArg("n", "R5").
-		Raw("MOVD $%s+0(SB), R6", cC0).Raw("LXVB16X (R0)(R6), VS57"). // V25 = 0xC0
-		Raw("MOVD $%s+0(SB), R6", c80).Raw("LXVB16X (R0)(R6), VS58"). // V26 = 0x80
+		Raw("MOVD $%s+0(SB), R6", cC0).Raw("LXVB16X (R0)(R6), VS57").  // V25 = 0xC0
+		Raw("MOVD $%s+0(SB), R6", c80).Raw("LXVB16X (R0)(R6), VS58").  // V26 = 0x80
 		Raw("MOVD $%s+0(SB), R6", c01b).Raw("LXVB16X (R0)(R6), VS59"). // V27 = 0x01
-		Raw("MOVD $0, R8").  // cont count accumulator
-		Raw("MOVD $0, R7").  // byte offset
+		Raw("MOVD $0, R8").                                            // cont count accumulator
+		Raw("MOVD $0, R7").                                            // byte offset
 		Label("csloop").
 		Raw("LXVB16X (R7)(R4), VS32"). // V0 = block
 		Raw("VAND V0, V25, V0").       // b & 0xC0
@@ -236,7 +236,7 @@ func main() {
 		Raw("MFVSRD VS32, R9").        // doubleword 0 count
 		Raw("ADD R9, R8").
 		Raw("VSLDOI $8, V0, V0, V1").
-		Raw("MFVSRD VS33, R9").        // doubleword 1 count
+		Raw("MFVSRD VS33, R9"). // doubleword 1 count
 		Raw("ADD R9, R8").
 		Raw("ADD $16, R7").
 		Raw("ADD $-1, R5").
