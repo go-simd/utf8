@@ -4,12 +4,9 @@ package utf8
 // unicode/utf8 (stdlib). Valid uses the Lemire-Keiser one-instruction-per-byte
 // validator; RuneCount counts non-continuation bytes over a validated prefix.
 //
-// NOTE: go-simd/utf8 ships SIMD kernels for amd64 / ppc64le / s390x only. On
-// arm64 (this host) there is no NEON kernel yet, so the dispatch falls back to
-// unicode/utf8 and go-simd == stdlib by construction. The arm64 numbers here
-// therefore confirm the zero-overhead fallback, not a SIMD speedup; the real
-// SIMD parity (Lemire-Keiser AVX2) must be measured on amd64 (follow-up, needs
-// an x86 host).
+// go-simd/utf8 ships SIMD kernels for amd64, arm64 (NEON), ppc64le and s390x.
+// BENCHMARKS.md holds the measured ratios (arm64 on an Apple M4 Max); the
+// other architectures need their own hosts to be re-measured.
 //
 //	GOWORK=off go test -run=^$ -bench='Parity' -benchmem .
 
