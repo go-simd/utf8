@@ -12,14 +12,12 @@
 // "byte > 0xF4"; every check ORs into a running error accumulator, valid iff
 // that accumulator is all-zero.
 //
-// The released arm64 assembler lacks several of the x86 building blocks, so we
-// synthesise them from the available NEON ops:
-//   - PSUBUSB (unsigned saturating subtract): subs_epu8(a,b) = umax(a,b) - b,
-//     via VUMAX then VSUB.
-//   - PCMPGTB (signed compare-greater): NEON-Go has only VCMEQ, so we flip the
-//     sign bit of both operands with VEOR 0x80 and do an unsigned compare:
-//     signed_gt(a,b) = NOT( umin(a^80,b^80) == (a^80) ), the inner equality
-//     being a<=b and the outer NOT (VEOR all-ones) the strict greater-than.
+// The x86 building blocks map onto NEON ops the Go assembler (checked on Go
+// 1.27) accepts by name:
+//   - PSUBUSB (unsigned saturating subtract) -> VUQSUB. (Older releases had no
+//     UQSUB mnemonic and this kernel used umax(a,b) - b, VUMAX then VSUB.)
+//   - PCMPGTB (signed compare-greater) -> VCMGT. (Older releases had only
+//     VCMEQ, and this kernel used a sign-flip + VUMIN/VCMEQ/NOT sequence.)
 //   - PSHUFB (nibble table lookup) -> VTBL; PALIGNR $k(prev,cur) -> VEXT $k with
 //     operand order (cur, prev) so each lane sees the byte k positions earlier.
 //   - PTEST -> reduce the error vector to a GPR (VMOV D-lanes + ORR).
@@ -82,8 +80,8 @@ func main() {
 	// Persistent state: V15=has_error, V13=prev rawbytes,
 	//   V14=prev high_nibbles, V12=prev carried_continuations.
 	// Constants (loaded once): V20=contLen, V21=initMins, V22=secMins,
-	//   V23=0x0F, V24=0xF4, V25=0xED, V26=0x9F, V27=0x8F, V28=allOnes,
-	//   V29=0x80, V30=0x01, V31=0x02.
+	//   V23=0x0F, V24=0xF4, V25=0xED, V26=0x9F, V27=0x8F, V30=0x01,
+	//   V31=0x02.
 	// Scratch: V0..V11.
 	// ====================================================================
 	b := arm64.NewFunc("validBlocks", sig(), 0)
@@ -97,8 +95,6 @@ func main() {
 	b.Raw("MOVD $0xED, R3").Raw("VDUP R3, V25.B16")
 	b.Raw("MOVD $0x9F, R3").Raw("VDUP R3, V26.B16")
 	b.Raw("MOVD $0x8F, R3").Raw("VDUP R3, V27.B16")
-	b.Raw("VMOVI $255, V28.B16")
-	b.Raw("MOVD $0x80, R3").Raw("VDUP R3, V29.B16")
 	b.Raw("VMOVI $1, V30.B16")
 	b.Raw("VMOVI $2, V31.B16")
 	b.Raw("VMOVI $0, V15.B16") // has_error = 0
@@ -112,19 +108,19 @@ func main() {
 	// --- high_nibbles = bytes >> 4 (V1) ---
 	b.Raw("VUSHR $4, V0.B16, V1.B16")
 	// --- checkSmallerThan0xF4: has_error |= subs_epu8(bytes, 0xF4) ---
-	b.Raw("VUMAX V24.B16, V0.B16, V3.B16").Raw("VSUB V24.B16, V3.B16, V3.B16")
+	b.Raw("VUQSUB V24.B16, V0.B16, V3.B16")
 	b.Raw("VORR V3.B16, V15.B16, V15.B16")
 	// --- initial_lengths = VTBL(contLen, high_nibbles) (V2) ---
 	b.Raw("VTBL V1.B16, [V20.B16], V2.B16")
 	// --- carryContinuations ---
 	// right1 = subs_epu8( ext15(prev_carries, init_len), 1 )
-	b.Raw("VEXT $15, V2.B16, V12.B16, V3.B16")                                 // [prev_carries[15], init_len[0..14]]
-	b.Raw("VUMAX V30.B16, V3.B16, V3.B16").Raw("VSUB V30.B16, V3.B16, V3.B16") // -1 sat
-	b.Raw("VADD V2.B16, V3.B16, V3.B16")                                       // V3 = sum = init_len + right1
+	b.Raw("VEXT $15, V2.B16, V12.B16, V3.B16") // [prev_carries[15], init_len[0..14]]
+	b.Raw("VUQSUB V30.B16, V3.B16, V3.B16")    // -1 sat
+	b.Raw("VADD V2.B16, V3.B16, V3.B16")       // V3 = sum = init_len + right1
 	// right2 = subs_epu8( ext14(prev_carries, sum), 2 )
-	b.Raw("VEXT $14, V3.B16, V12.B16, V5.B16")                                 // [prev_carries[14..15], sum[0..13]]
-	b.Raw("VUMAX V31.B16, V5.B16, V5.B16").Raw("VSUB V31.B16, V5.B16, V5.B16") // -2 sat
-	b.Raw("VADD V5.B16, V3.B16, V3.B16")                                       // V3 = carried_continuations
+	b.Raw("VEXT $14, V3.B16, V12.B16, V5.B16") // [prev_carries[14..15], sum[0..13]]
+	b.Raw("VUQSUB V31.B16, V5.B16, V5.B16")    // -2 sat
+	b.Raw("VADD V5.B16, V3.B16, V3.B16")       // V3 = carried_continuations
 	// --- checkContinuations ---
 	// overunder = cmpeq( sgt(carries, init_len), sgt(init_len, 0) )
 	emitSGT(b, "V3.B16", "V2.B16", "V5.B16") // V5 = carries > init_len
@@ -274,15 +270,9 @@ func main() {
 	fmt.Println("wrote utf8_arm64.s")
 }
 
-// emitSGT emits a signed byte compare-greater (a > b -> 0xFF/0x00) into dst,
-// using the sign-flip + unsigned trick (NEON-Go has only VCMEQ). It clobbers
-// V16/V17/V18 as scratch and requires V29=0x80 splat and V28=all-ones to be
-// loaded. dst may alias a or b. Returns the builder for chaining.
+// emitSGT emits a signed byte compare-greater (a > b -> 0xFF/0x00) into dst:
+// VCMGT, the NEON CMGT (register) form. dst may alias a or b. Returns the
+// builder for chaining.
 func emitSGT(b *arm64.Builder, a, bb, dst string) *arm64.Builder {
-	return b.
-		Raw("VEOR V29.B16, %s, V16.B16", a).    // a' = a ^ 0x80
-		Raw("VEOR V29.B16, %s, V17.B16", bb).   // b' = b ^ 0x80
-		Raw("VUMIN V17.B16, V16.B16, V18.B16"). // umin(a',b')
-		Raw("VCMEQ V16.B16, V18.B16, V18.B16"). // a' <= b'  (i.e. a <= b)
-		Raw("VEOR V28.B16, V18.B16, %s", dst)   // dst = NOT(a<=b) = a > b
+	return b.Raw("VCMGT %s, %s, %s", bb, a, dst) // cmgt dst, a, b
 }
