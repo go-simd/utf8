@@ -17,8 +17,9 @@ GOWORK=off go test -run='^$' -bench=Parity -benchmem -benchtime=0.3s -count=3 .
 > **arm64 NEON kernel (this host).** As of 2026-06-22 go-simd/utf8 ships a real
 > **arm64/NEON** kernel, alongside amd64/ppc64le/s390x: `validBlocks` is the
 > Lemire–Keiser validator ported to NEON (VTBL nibble lookups; PSUBUSB, PCMPGTB
-> and PALIGNR synthesised from VUMAX/VSUB, the sign-flip + VUMIN/VCMEQ trick, and
-> VEXT, since the released arm64 assembler lacks those ops directly), `countCont`
+> and PALIGNR map to VUQSUB, VCMGT and VEXT — the first two were synthesised from
+> VUMAX/VSUB and a sign-flip + VUMIN/VCMEQ trick until the Go 1.27 assembler
+> accepted them by name), `countCont`
 > counts continuation bytes via VUADDLV, and a cheap 64-byte-unrolled ASCII
 > pre-scan keeps the pure-ASCII fast path memory-bound. The numbers below are
 > measured natively on this NEON host.
