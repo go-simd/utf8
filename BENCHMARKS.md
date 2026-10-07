@@ -1,17 +1,19 @@
 # Performance parity — go-simd/utf8 vs stdlib
 
-**Methodology.** Apple M4 Max (arm64, NEON), macOS (Darwin 25.5.0), Go 1.26.4,
-single core. Reference: `unicode/utf8` (Go stdlib — also the scalar fallback of
+**Methodology.** Apple M4 Max (arm64, NEON), macOS 26.6.2 (Darwin 25.6.0),
+Go 1.27.1, single core; measured 2026-10-07 at commit `ac96e93` (after #15). Reference: `unicode/utf8` (Go stdlib — also the scalar fallback of
 go-simd). `Valid` implements the Lemire–Keiser lookup validator; `RuneCount`
 counts non-continuation bytes. Inputs: printable-ASCII fast-path and a
 multibyte-mixed buffer (a/é/λ/世/🚀), seeds 2/3, sizes 64 B … 1 MiB;
-`-benchtime=0.3s -count=3`, median reported. Correctness: `go test` byte-matches
+`-benchtime=0.3s`, 10 runs, median reported (the host is shared: each run started
+only once the 1-minute load average was below 8, and runs alternated with a
+pre-#15 build so drift hit both equally; load 3.9–7.8 during the series). Correctness: `go test` byte-matches
 `unicode/utf8.Valid` / `RuneCount` over ASCII, multibyte and every invalid class
 (overlong, surrogate, too-large, lone continuation), plus a fuzz-validated
 every-offset boundary sweep through the NEON kernel. Reproduce:
 
 ```
-GOWORK=off go test -run='^$' -bench=Parity -benchmem -benchtime=0.3s -count=3 .
+GOWORK=off go test -run='^$' -bench=Parity -benchmem -benchtime=0.3s -count=10 .
 ```
 
 > **arm64 NEON kernel (this host).** As of 2026-06-22 go-simd/utf8 ships a real
@@ -28,28 +30,38 @@ GOWORK=off go test -run='^$' -bench=Parity -benchmem -benchtime=0.3s -count=3 .
 
 | size | go-simd (GB/s) | stdlib (GB/s) | ratio | verdict |
 |------|---------------:|--------------:|------:|---------|
-| 64 B   |  17.7 |  8.0 | 2.21× | NEON wins |
-| 1 KiB  |  99.0 | 62.8 | 1.58× | NEON wins |
-| 16 KiB | 116.0 | 89.2 | 1.30× | NEON wins |
-| 1 MiB  | 105.3 | 87.1 | 1.21× | NEON wins |
+| 64 B   |  21.4 |  9.4 | 2.29× | NEON wins |
+| 1 KiB  | 103.7 | 62.5 | 1.66× | NEON wins |
+| 16 KiB | 122.1 | 91.2 | 1.34× | NEON wins |
+| 1 MiB  | 110.8 | 92.8 | 1.19× | NEON wins |
 
 ## Valid — multibyte mixed
 
 | size | go-simd (GB/s) | stdlib (GB/s) | ratio | verdict |
 |------|---------------:|--------------:|------:|---------|
-| 64 B   | 3.94 | 2.07 | 1.90× | NEON wins |
-| 1 KiB  | 3.94 | 1.62 | 2.43× | NEON wins |
-| 16 KiB | 3.88 | 1.48 | 2.62× | NEON wins |
-| 1 MiB  | 3.87 | 0.43 | **9.0×** | NEON wins |
+| 64 B   | 7.10 | 2.33 | 3.05× | NEON wins |
+| 1 KiB  | 5.36 | 1.76 | 3.05× | NEON wins |
+| 16 KiB | 4.88 | 1.56 | 3.14× | NEON wins |
+| 1 MiB  | 4.83 | 0.47 | **10.4×** | NEON wins |
 
 ## RuneCount — multibyte mixed
 
 | size | go-simd (GB/s) | stdlib (GB/s) | ratio | verdict |
 |------|---------------:|--------------:|------:|---------|
-| 64 B   | 3.50 | 0.92 | 3.81× | NEON wins |
-| 1 KiB  | 3.60 | 1.00 | 3.59× | NEON wins |
-| 16 KiB | 3.59 | 1.00 | 3.58× | NEON wins |
-| 1 MiB  | 3.59 | 0.41 | **8.7×** | NEON wins |
+| 64 B   | 4.89 | 1.15 | 4.27× | NEON wins |
+| 1 KiB  | 4.86 | 1.23 | 3.94× | NEON wins |
+| 16 KiB | 4.49 | 1.24 | 3.62× | NEON wins |
+| 1 MiB  | 4.44 | 0.50 | **8.9×** | NEON wins |
+
+### Effect of #15 (native VUQSUB/VCMGT), same series
+
+Medians of the same 10 alternating runs, pre-#15 build (`6715050`) vs `ac96e93`.
+The ASCII rows do not run the validator and stay within ±1.5%.
+
+| op (go-simd) | 64 B | 1 KiB | 16 KiB | 1 MiB |
+|--------------|-----:|------:|-------:|------:|
+| Valid mixed  | −42.0% | −22.4% | −17.2% | −16.3% |
+| RuneCount    | −22.5% | −19.9% | −14.8% | −15.0% |
 
 ## Before → after (arm64)
 
@@ -58,9 +70,9 @@ Prior to the NEON kernel, go-simd/utf8 *was* `unicode/utf8` on arm64
 
 | op (1 MiB) | before (×stdlib) | after (×stdlib) |
 |------------|-----------------:|----------------:|
-| Valid ASCII | 1.00× (fallback) | **1.21×** |
-| Valid mixed | 1.00× (fallback) | **9.0×** |
-| RuneCount   | 1.00× (fallback) | **8.7×** |
+| Valid ASCII | 1.00× (fallback) | **1.19×** |
+| Valid mixed | 1.00× (fallback) | **10.4×** |
+| RuneCount   | 1.00× (fallback) | **8.9×** |
 
 ## amd64 (AVX2, GitHub Actions x86_64 runner — ratios valid, absolute ns/op CI-noisy)
 
@@ -134,9 +146,9 @@ unchanged within shared-runner noise.
 ## Summary
 
 * The new **arm64/NEON kernel wins on every workload**: the multibyte/RuneCount
-  paths — where the stdlib decoder drops to ~0.4–1.5 GB/s — see 1.9–9× speedups,
+  paths — where the stdlib decoder drops to ~0.5–2.3 GB/s — see 3.0–10.4× speedups,
   and the ASCII fast path (the case a naive Lemire pass would *regress*) stays
-  ahead of stdlib at 1.2–2.2× thanks to the 64-byte-unrolled high-bit pre-scan.
+  ahead of stdlib at 1.2–2.3× thanks to the 64-byte-unrolled high-bit pre-scan.
 * Results are byte-identical to `unicode/utf8.Valid` / `RuneCount` on every
   input, including overlong / surrogate / too-large / lone-continuation errors
   and every ASCII→multibyte boundary (fuzz-clean, 100% coverage).

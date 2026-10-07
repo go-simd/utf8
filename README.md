@@ -23,7 +23,8 @@ n  := utf8.RuneCountInString(s) // same int as unicode/utf8.RuneCountInString(s)
 | amd64 | **SSE2/SSSE3 + SSE4.1** (16 B/block) and **AVX2** (32 B/block), runtime-dispatched |
 | ppc64le | **VSX/AltiVec** (16 B/block), baseline — qemu-validated; native perf pending |
 | s390x | **vector facility** (16 B/block) + VX ASCII pre-scan, baseline — measured on real z15 (see Performance) |
-| arm64 / loong64 / riscv64 | scalar (`unicode/utf8`) — NEON/LSX/RVV planned |
+| arm64 | **NEON** (16 B/block) + ASCII pre-scan, baseline — measured on Apple M4 Max (see Performance) |
+| loong64 / riscv64 | scalar (`unicode/utf8`) — LSX/RVV planned |
 
 The ppc64le and s390x kernels are 1:1 ports of the amd64 SSE path (no runtime
 dispatch, since VSX and the vector facility are baseline on POWER8+ and z13+):
@@ -116,8 +117,8 @@ VM — i.e. stuartcarnie measured slightly faster *under QEMU's TCG*. This does
 **not** overturn the native-CI verdict above (ours +3.5% on real AVX2 silicon):
 the two validators are within a few percent and QEMU's non-cycle-accurate
 emulation favours stuartcarnie's instruction mix here. The trusted native-CI
-ranking (ours edges stuartcarnie) is kept. arm64 has **no SIMD kernel** (NEON
-planned), so `BenchmarkValid` ≈ stdlib (~1.0×) on Apple Silicon, as expected.
+ranking (ours edges stuartcarnie) is kept. On arm64 the NEON kernel is measured
+natively; see [arm64 — measured on Apple M4 Max](#arm64--measured-on-apple-m4-max).
 
 `RuneCount` throughput on the same ~1 MiB buffer, native amd64, `-count=6`,
 median MB/s. The `RuneCount` headline numbers come from the same native amd64
@@ -136,6 +137,20 @@ allocation), which is the bulk of its cost on mixed text.
 On the local x86-64 validation VM (AVX2, `GOAMD64=v1`, QEMU-hosted so absolute
 MB/s run low) `RuneCount` measured ~372 MB/s vs ~81 MB/s for the standard
 library — about **4.6×**; the native-runner CI fills the table above.
+
+### arm64 — measured on Apple M4 Max
+
+`Valid`/`RuneCount` throughput on an Apple M4 Max (NEON, go1.27.1, 2026-10-07,
+10 runs, medians, `BenchmarkParity*`, vs `unicode/utf8`); full tables in
+[BENCHMARKS.md](BENCHMARKS.md):
+
+| workload | size | this package vs stdlib |
+|---|---|---:|
+| `ValidASCII` | 64 B – 1 MiB | **1.19–2.29×** |
+| `ValidMixed` | 64 B – 16 KiB | **3.05–3.14×** |
+| `ValidMixed` | 1 MiB | **10.4×** |
+| `RuneCount` | 64 B – 16 KiB | **3.62–4.27×** |
+| `RuneCount` | 1 MiB | **8.9×** |
 
 ### s390x — measured on real IBM z15
 
